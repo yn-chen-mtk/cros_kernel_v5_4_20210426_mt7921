@@ -1231,7 +1231,6 @@ mt7921_mac_reset(struct mt7921_dev *dev)
 	mt76_worker_enable(&dev->mt76.tx_worker);
 
 	clear_bit(MT76_MCU_RESET, &dev->mphy.state);
-	clear_bit(MT76_STATE_PM, &dev->mphy.state);
 
 	mt76_wr(dev, MT_WFDMA0_HOST_INT_ENA, 0);
 	mt76_wr(dev, MT_PCIE_MAC_INT_ENABLE, 0xff);
@@ -1262,13 +1261,17 @@ void mt7921_mac_reset_work(struct work_struct *work)
 	ieee80211_stop_queues(hw);
 
 	cancel_delayed_work_sync(&dev->mphy.mac_work);
-	cancel_delayed_work_sync(&dev->pm.ps_work);
-	cancel_work_sync(&dev->pm.wake_work);
 	cancel_work_sync(&dev->phy.roc.work);
 	del_timer_sync(&dev->phy.roc.timer);
 
 	mutex_lock(&dev->mt76.mutex);
+	mt76_connac_pm_wake(&dev->mt76.phy, &dev->pm);
 	for (i = 0; i < 10; i++) {
+		__mt7921_mcu_drv_pmctrl(dev);
+		clear_bit(MT76_STATE_PM, &dev->mphy.state);
+		dev->pm.stats.last_wake_event = jiffies;
+		dev->pm.stats.last_doze_event = jiffies;
+
 		if (!mt7921_mac_reset(dev))
 			break;
 	}
@@ -1289,6 +1292,7 @@ void mt7921_mac_reset_work(struct work_struct *work)
 	ieee80211_iterate_active_interfaces(hw,
 					    IEEE80211_IFACE_ITER_RESUME_ALL,
 					    mt7921_vif_connect_iter, NULL);
+	mt76_connac_power_save_sched(&dev->mt76.phy, &dev->pm);
 }
 
 void mt7921_reset(struct mt76_dev *mdev)
