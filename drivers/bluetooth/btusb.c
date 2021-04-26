@@ -25,7 +25,7 @@
 #include "btbcm.h"
 #include "btrtl.h"
 
-#define VERSION "0.8"
+#define VERSION "1.0.0.20210419"
 
 static bool disable_scofix;
 static bool force_scofix;
@@ -1332,7 +1332,7 @@ static int btusb_open(struct hci_dev *hdev)
 	struct btusb_data *data = hci_get_drvdata(hdev);
 	int err;
 
-	BT_DBG("%s", hdev->name);
+	BT_INFO("btusb open %s", hdev->name);
 
 	err = usb_autopm_get_interface(data->intf);
 	if (err < 0)
@@ -1379,12 +1379,14 @@ static int btusb_open(struct hci_dev *hdev)
 
 done:
 	usb_autopm_put_interface(data->intf);
+	BT_INFO("btusb open done %s", hdev->name);
 	return 0;
 
 failed:
 	clear_bit(BTUSB_INTR_RUNNING, &data->flags);
 setup_fail:
 	usb_autopm_put_interface(data->intf);
+	BT_INFO("btusb open failed %s, err = %d", hdev->name, err);
 	return err;
 }
 
@@ -1402,7 +1404,7 @@ static int btusb_close(struct hci_dev *hdev)
 	struct btusb_data *data = hci_get_drvdata(hdev);
 	int err;
 
-	BT_DBG("%s", hdev->name);
+	BT_INFO("btusb_close %s", hdev->name);
 
 	cancel_delayed_work(&data->rx_work);
 	cancel_work_sync(&data->work);
@@ -1433,6 +1435,7 @@ static int btusb_close(struct hci_dev *hdev)
 
 failed:
 	usb_scuttle_anchored_urbs(&data->deferred);
+	BT_INFO("btusb_close done %s", hdev->name);
 	return 0;
 }
 
@@ -2759,6 +2762,15 @@ static int btusb_shutdown_intel_new(struct hci_dev *hdev)
 
 #ifdef CONFIG_BT_HCIBTUSB_MTK
 
+/* UHW CR mapping */
+#define BT_MISC 0x70002510
+#define BT_SUBSYS_RST 0x70002610
+#define UDMA_INT_STA_BT 0x74000024
+#define UDMA_INT_STA_BT1 0x74000308
+#define BT_WDT_STATUS 0x740003A0
+#define EP_RST_OPT 0x74011890
+#define EP_RST_IN_OUT_OPT 0x00010001
+
 #define FIRMWARE_MT7663		"mediatek/mt7663pr2h.bin"
 #define FIRMWARE_MT7668		"mediatek/mt7668pr2h.bin"
 
@@ -3113,6 +3125,7 @@ static int btusb_mtk_setup_firmware_79xx(struct hci_dev *hdev, const char *fwnam
 	struct btmtk_hci_wmt_params wmt_params;
 	struct btmtk_global_desc *globaldesc = NULL;
 	struct btmtk_section_map *sectionmap;
+	struct btmtk_patch_header *patchhdr = NULL;
 	const struct firmware *fw;
 	const u8 *fw_ptr;
 	const u8 *fw_bin_ptr;
@@ -3131,6 +3144,9 @@ static int btusb_mtk_setup_firmware_79xx(struct hci_dev *hdev, const char *fwnam
 	fw_bin_ptr = fw_ptr;
 	globaldesc = (struct btmtk_global_desc *)(fw_ptr + MTK_FW_ROM_PATCH_HEADER_SIZE);
 	section_num = le32_to_cpu(globaldesc->section_num);
+	patchhdr = (struct btmtk_patch_header*)fw_ptr;
+
+	bt_dev_info(hdev, "Built Time = %s", patchhdr->datetime);
 
 	for (i = 0; i < section_num; i++) {
 		first_block = 1;
@@ -3333,6 +3349,32 @@ static int btusb_mtk_func_query(struct hci_dev *hdev)
 	return status;
 }
 
+static int btusb_mtk_uhw_reg_write(struct btusb_data *data, u32 reg, u32 val)
+{
+	int pipe, err, size = sizeof(u32);
+	u8 buf[4];
+
+	buf[0] = (val & 0x00ff);
+	buf[1] = ((val >> 8) & 0x00ff);
+	buf[2] = ((val >> 16) & 0x00ff);
+	buf[3] = ((val >> 24) & 0x00ff);
+
+		BT_ERR("send uhw");
+	pipe = usb_sndctrlpipe(data->udev, 0);
+	err = usb_control_msg(data->udev, pipe, 0x02,
+			      0x5E,
+			      reg >> 16, reg & 0xffff,
+			      buf, size, USB_CTRL_SET_TIMEOUT);
+	if (err < 0) {
+		BT_ERR("Failed to write uhw reg(%d)", err);
+		goto err_free_buf;
+	}
+
+err_free_buf:
+
+	return err;
+}
+
 static int btusb_mtk_reg_read(struct btusb_data *data, u32 reg, u32 *val)
 {
 	int pipe, err, size = sizeof(u32);
@@ -3378,6 +3420,7 @@ static int btusb_mtk_setup(struct hci_dev *hdev)
 	u32 fw_version = 0;
 	u8 param;
 
+	bt_dev_info(hdev, "btusb_mtk_setup");
 	calltime = ktime_get();
 
 	err = btusb_mtk_id_get(data, 0x80000008, &dev_id);
@@ -3412,6 +3455,7 @@ static int btusb_mtk_setup(struct hci_dev *hdev)
 			 dev_id & 0xffff, (fw_version & 0xff) + 1);
 		err = btusb_mtk_setup_firmware_79xx(hdev, fw_bin_name);
 
+		btusb_mtk_uhw_reg_write(data, EP_RST_OPT, EP_RST_IN_OUT_OPT);
 		/* Enable Bluetooth protocol */
 		param = 1;
 		wmt_params.op = BTMTK_WMT_FUNC_CTRL;
@@ -3519,6 +3563,8 @@ static int btusb_mtk_shutdown(struct hci_dev *hdev)
 	u8 param = 0;
 	int err;
 
+	bt_dev_info(hdev, "btusb_mtk_shut_down");
+
 	/* Disable the device */
 	wmt_params.op = BTMTK_WMT_FUNC_CTRL;
 	wmt_params.flag = 0;
@@ -3533,6 +3579,71 @@ static int btusb_mtk_shutdown(struct hci_dev *hdev)
 	}
 
 	return 0;
+}
+
+static int btusb_recv_bulk_mtk(struct btusb_data *data, void *buffer, int count)
+{
+	struct sk_buff *skb;
+	unsigned long flags;
+	int err = 0;
+
+	spin_lock_irqsave(&data->rxlock, flags);
+	skb = data->acl_skb;
+
+	while (count) {
+		int len;
+
+		if (!skb) {
+			skb = bt_skb_alloc(HCI_MAX_FRAME_SIZE, GFP_ATOMIC);
+			if (!skb) {
+				err = -ENOMEM;
+				break;
+			}
+
+			hci_skb_pkt_type(skb) = HCI_ACLDATA_PKT;
+			hci_skb_expect(skb) = HCI_ACL_HDR_SIZE;
+		}
+
+		len = min_t(uint, hci_skb_expect(skb), count);
+		skb_put_data(skb, buffer, len);
+
+		count -= len;
+		buffer += len;
+		hci_skb_expect(skb) -= len;
+
+		if (skb->len == HCI_ACL_HDR_SIZE) {
+			__le16 dlen = hci_acl_hdr(skb)->dlen;
+
+			/* Complete ACL header */
+			hci_skb_expect(skb) = __le16_to_cpu(dlen);
+
+			if (skb_tailroom(skb) < hci_skb_expect(skb)) {
+				kfree_skb(skb);
+				skb = NULL;
+
+				err = -EILSEQ;
+				break;
+			}
+		}
+
+		if (!hci_skb_expect(skb)) {
+			/* Complete frame */
+			if (skb->data[0] == 0x6f && skb->data[1] == 0xfc){
+				hci_recv_diag(data->hdev, skb);
+			} else if ((skb->data[0] == 0xfe && skb->data[1] == 0x05) ||
+				  (skb->data[0] == 0xff && skb->data[1] == 0x05)) {
+				hci_recv_diag(data->hdev, skb);
+			} else {
+				btusb_recv_acl(data, skb);
+			}
+			skb = NULL;
+		}
+	}
+
+	data->acl_skb = skb;
+	spin_unlock_irqrestore(&data->rxlock, flags);
+
+	return err;
 }
 
 MODULE_FIRMWARE(FIRMWARE_MT7663);
@@ -4085,6 +4196,7 @@ static int btusb_probe(struct usb_interface *intf,
 	int i, err;
 
 	BT_DBG("intf %p id %p", intf, id);
+	BT_INFO("MTK BT Driver Version: %s", VERSION);
 
 	/* interface numbers are hardcoded in the spec */
 	if (intf->cur_altsetting->desc.bInterfaceNumber != 0) {
@@ -4310,6 +4422,9 @@ static int btusb_probe(struct usb_interface *intf,
 		hdev->setup = btusb_mtk_setup;
 		hdev->shutdown = btusb_mtk_shutdown;
 		hdev->manufacturer = 70;
+		data->recv_bulk = btusb_recv_bulk_mtk;
+		set_bit(HCI_QUIRK_SIMULTANEOUS_DISCOVERY, &hdev->quirks);
+		set_bit(HCI_QUIRK_VALID_LE_STATES, &hdev->quirks);
 		set_bit(HCI_QUIRK_NON_PERSISTENT_SETUP, &hdev->quirks);
 	}
 #endif
