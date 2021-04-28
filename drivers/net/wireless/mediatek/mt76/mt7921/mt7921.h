@@ -45,7 +45,13 @@
 #define MT7921_SKU_MAX_DELTA_IDX	MT7921_SKU_RATE_NUM
 #define MT7921_SKU_TABLE_SIZE		(MT7921_SKU_RATE_NUM + 1)
 
-#define to_rssi(field, rxv)		((FIELD_GET(field, rxv) - 220) / 2)
+#define to_rssi(field, rxv)					\
+	({							\
+		u8 t = FIELD_GET(field, rxv) < 220 ?		\
+		       FIELD_GET(field, rxv) : 220;		\
+		((t - 220) / 2);				\
+	})
+
 #define to_rcpi(rssi)			(2 * (rssi) + 220)
 
 struct mt7921_vif;
