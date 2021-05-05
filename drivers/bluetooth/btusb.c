@@ -25,7 +25,7 @@
 #include "btbcm.h"
 #include "btrtl.h"
 
-#define VERSION "1.0.0.20210429"
+#define VERSION "1.0.0.20210505"
 
 static bool disable_scofix;
 static bool force_scofix;
@@ -1747,50 +1747,52 @@ static void btusb_work(struct work_struct *work)
 	int new_alts = 0;
 	int err;
 
-	if (data->sco_num > 0) {
-		if (!test_bit(BTUSB_DID_ISO_RESUME, &data->flags)) {
-			err = usb_autopm_get_interface(data->isoc ? data->isoc : data->intf);
-			if (err < 0) {
-				clear_bit(BTUSB_ISOC_RUNNING, &data->flags);
-				usb_kill_anchored_urbs(&data->isoc_anchor);
-				return;
+	if (test_bit(HCI_RUNNING, &hdev->flags)) {
+		if (data->sco_num > 0) {
+			if (!test_bit(BTUSB_DID_ISO_RESUME, &data->flags)) {
+				err = usb_autopm_get_interface(data->isoc ? data->isoc : data->intf);
+				if (err < 0) {
+					clear_bit(BTUSB_ISOC_RUNNING, &data->flags);
+					usb_kill_anchored_urbs(&data->isoc_anchor);
+					return;
+				}
+
+				set_bit(BTUSB_DID_ISO_RESUME, &data->flags);
 			}
 
-			set_bit(BTUSB_DID_ISO_RESUME, &data->flags);
+			if (data->air_mode == HCI_NOTIFY_ENABLE_SCO_CVSD) {
+				if (hdev->voice_setting & 0x0020) {
+					static const int alts[3] = { 2, 4, 5 };
+
+					new_alts = alts[data->sco_num - 1];
+				} else {
+					new_alts = data->sco_num;
+				}
+			} else if (data->air_mode == HCI_NOTIFY_ENABLE_SCO_TRANSP) {
+				/* Check if Alt 6 is supported for Transparent audio */
+				if (test_bit(BTUSB_USE_ALT1_FOR_WBS,
+							&data->flags)) {
+					new_alts = 1;
+					bt_dev_info(hdev, "alt setting: new_alts = %d", new_alts);
+				} else if (btusb_find_altsetting(data, 6)) {
+					data->usb_alt6_packet_flow = true;
+					new_alts = 6;
+					bt_dev_info(hdev, "alt setting: new_alts = %d", new_alts);
+				} else {
+					bt_dev_err(hdev, "Device does not support ALT setting 6");
+				}
+			}
+
+			if (btusb_switch_alt_setting(hdev, new_alts) < 0)
+				bt_dev_err(hdev, "set USB alt:(%d) failed!", new_alts);
+		} else {
+			clear_bit(BTUSB_ISOC_RUNNING, &data->flags);
+			usb_kill_anchored_urbs(&data->isoc_anchor);
+
+			__set_isoc_interface(hdev, 0);
+			if (test_and_clear_bit(BTUSB_DID_ISO_RESUME, &data->flags))
+				usb_autopm_put_interface(data->isoc ? data->isoc : data->intf);
 		}
-
-		if (data->air_mode == HCI_NOTIFY_ENABLE_SCO_CVSD) {
-			if (hdev->voice_setting & 0x0020) {
-				static const int alts[3] = { 2, 4, 5 };
-
-				new_alts = alts[data->sco_num - 1];
-			} else {
-				new_alts = data->sco_num;
-			}
-		} else if (data->air_mode == HCI_NOTIFY_ENABLE_SCO_TRANSP) {
-			/* Check if Alt 6 is supported for Transparent audio */
-			if (test_bit(BTUSB_USE_ALT1_FOR_WBS,
-						&data->flags)) {
-				new_alts = 1;
-				bt_dev_info(hdev, "alt setting: new_alts = %d", new_alts);
-			} else if (btusb_find_altsetting(data, 6)) {
-				data->usb_alt6_packet_flow = true;
-				new_alts = 6;
-				bt_dev_info(hdev, "alt setting: new_alts = %d", new_alts);
-			} else {
-				bt_dev_err(hdev, "Device does not support ALT setting 6");
-			}
-		}
-
-		if (btusb_switch_alt_setting(hdev, new_alts) < 0)
-			bt_dev_err(hdev, "set USB alt:(%d) failed!", new_alts);
-	} else {
-		clear_bit(BTUSB_ISOC_RUNNING, &data->flags);
-		usb_kill_anchored_urbs(&data->isoc_anchor);
-
-		__set_isoc_interface(hdev, 0);
-		if (test_and_clear_bit(BTUSB_DID_ISO_RESUME, &data->flags))
-			usb_autopm_put_interface(data->isoc ? data->isoc : data->intf);
 	}
 }
 
@@ -3375,6 +3377,34 @@ err_free_buf:
 	return err;
 }
 
+static int btusb_mtk_uhw_reg_read(struct btusb_data *data, u32 reg, u32 *val)
+{
+	int pipe, err, size = sizeof(u32);
+	void *buf;
+
+	buf = kzalloc(size, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
+	pipe = usb_rcvctrlpipe(data->udev, 0);
+	err = usb_control_msg(data->udev, pipe, 0x01,
+			      0xDE,
+			      reg >> 16, reg & 0xffff,
+			      buf, size, USB_CTRL_SET_TIMEOUT);
+	if (err < 0) {
+		BT_ERR("Failed to write uhw reg(%d)", err);
+		goto err_free_buf;
+	}
+
+	*val = get_unaligned_le32(buf);
+	BT_INFO("%s: reg=%x, value=0x%08x", __func__, reg, *val);
+
+err_free_buf:
+	kfree(buf);
+
+	return err;
+}
+
 static int btusb_mtk_reg_read(struct btusb_data *data, u32 reg, u32 *val)
 {
 	int pipe, err, size = sizeof(u32);
@@ -3581,6 +3611,87 @@ static int btusb_mtk_shutdown(struct hci_dev *hdev)
 	return 0;
 }
 
+static void btusb_mtk_cmd_timeout(struct hci_dev *hdev)
+{
+	struct btusb_data *data = hci_get_drvdata(hdev);
+	u32 val;
+	int err;
+
+	bt_dev_err(hdev, "btusb_mtk_cmd_timeout");
+
+	/*
+	 * Toggle the hard reset line if the platform provides one. The reset
+	 * is going to yank the device off the USB and then replug. So doing
+	 * once is enough. The cleanup is handled correctly on the way out
+	 * (standard USB disconnect), and the new device is detected cleanly
+	 * and bound to the driver again like it should be.
+	 */
+	if (test_and_set_bit(BTUSB_HW_RESET_ACTIVE, &data->flags)) {
+		bt_dev_err(hdev, "last reset failed? Not resetting again");
+		return;
+	}
+
+	usb_disable_autosuspend(data->udev);
+	bt_dev_err(hdev, "Initiating HW reset via uhw");
+	data->sco_num = 0;
+
+	btusb_stop_traffic(data);
+	usb_kill_anchored_urbs(&data->tx_anchor);
+	/* For reset */
+	btusb_mtk_uhw_reg_write(data, EP_RST_OPT, EP_RST_IN_OUT_OPT);
+
+	/* read interrupt EP15 CR */
+	btusb_mtk_uhw_reg_read(data, BT_WDT_STATUS, &val);
+
+	/* Write Reset CR to 1 */
+	btusb_mtk_uhw_reg_write(data, BT_SUBSYS_RST, 1);
+
+	btusb_mtk_uhw_reg_write(data, UDMA_INT_STA_BT, 0x000000FF);
+	btusb_mtk_uhw_reg_read(data, UDMA_INT_STA_BT, &val);
+	btusb_mtk_uhw_reg_write(data, UDMA_INT_STA_BT1, 0x000000FF);
+	btusb_mtk_uhw_reg_read(data, UDMA_INT_STA_BT1, &val);
+
+	/* Write Reset CR to 0 */
+	btusb_mtk_uhw_reg_write(data, BT_SUBSYS_RST, 0);
+
+	/* Read reset CR */
+	btusb_mtk_uhw_reg_read(data, BT_SUBSYS_RST, &val);
+
+	msleep(900);
+	btusb_mtk_uhw_reg_read(data, BT_MISC, &val);
+	btusb_mtk_id_get(data, 0x70010200, &val);
+
+	bt_dev_err(hdev, "device id (%x)", val);
+	btusb_mtk_uhw_reg_read(data, BT_MISC, &val);
+	btusb_mtk_setup(hdev);
+	bt_dev_err(hdev, "steup done");
+
+	if (test_bit(BTUSB_INTR_RUNNING, &data->flags)) {
+		err = btusb_submit_intr_urb(hdev, GFP_NOIO);
+		if (err < 0) {
+			clear_bit(BTUSB_INTR_RUNNING, &data->flags);
+		}
+	}
+
+	if (test_bit(BTUSB_BULK_RUNNING, &data->flags)) {
+		err = btusb_submit_bulk_urb(hdev, GFP_NOIO);
+		if (err < 0) {
+			clear_bit(BTUSB_BULK_RUNNING, &data->flags);
+		}
+
+		btusb_submit_bulk_urb(hdev, GFP_NOIO);
+	}
+
+	if (test_bit(BTUSB_ISOC_RUNNING, &data->flags)) {
+		if (btusb_submit_isoc_urb(hdev, GFP_NOIO) < 0)
+			clear_bit(BTUSB_ISOC_RUNNING, &data->flags);
+		else
+			btusb_submit_isoc_urb(hdev, GFP_NOIO);
+	}
+	usb_enable_autosuspend(data->udev);
+	clear_bit(BTUSB_HW_RESET_ACTIVE, &data->flags);
+}
+
 static int btusb_recv_bulk_mtk(struct btusb_data *data, void *buffer, int count)
 {
 	struct sk_buff *skb;
@@ -3629,6 +3740,7 @@ static int btusb_recv_bulk_mtk(struct btusb_data *data, void *buffer, int count)
 		if (!hci_skb_expect(skb)) {
 			/* Complete frame */
 			if (skb->data[0] == 0x6f && skb->data[1] == 0xfc){
+				usb_disable_autosuspend(data->udev);
 				hci_recv_diag(data->hdev, skb);
 			} else if ((skb->data[0] == 0xfe && skb->data[1] == 0x05) ||
 				  (skb->data[0] == 0xff && skb->data[1] == 0x05)) {
@@ -4423,6 +4535,7 @@ static int btusb_probe(struct usb_interface *intf,
 		hdev->shutdown = btusb_mtk_shutdown;
 		hdev->manufacturer = 70;
 		data->recv_bulk = btusb_recv_bulk_mtk;
+		hdev->cmd_timeout = btusb_mtk_cmd_timeout;
 		set_bit(HCI_QUIRK_SIMULTANEOUS_DISCOVERY, &hdev->quirks);
 		set_bit(HCI_QUIRK_VALID_LE_STATES, &hdev->quirks);
 		set_bit(HCI_QUIRK_NON_PERSISTENT_SETUP, &hdev->quirks);
