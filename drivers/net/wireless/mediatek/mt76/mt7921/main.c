@@ -359,6 +359,7 @@ static int mt7921_set_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
 	struct mt7921_vif *mvif = (struct mt7921_vif *)vif->drv_priv;
 	struct mt7921_sta *msta = sta ? (struct mt7921_sta *)sta->drv_priv :
 				  &mvif->sta;
+	struct mt7921_sta msta_wep;
 	struct mt76_wcid *wcid = &msta->wcid;
 	u8 *wcid_keyidx = &wcid->hw_key_idx;
 	int idx = key->keyidx, err = 0;
@@ -388,6 +389,10 @@ static int mt7921_set_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
 		break;
 	case WLAN_CIPHER_SUITE_WEP40:
 	case WLAN_CIPHER_SUITE_WEP104:
+		/* fake an unicast wep key */
+		memcpy(&msta_wep, msta, sizeof(struct mt7921_sta));
+		msta_wep.wcid.idx = 0x01;
+		break;
 	default:
 		return -EOPNOTSUPP;
 	}
@@ -400,6 +405,12 @@ static int mt7921_set_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
 		*wcid_keyidx = -1;
 	else
 		goto out;
+
+	if ((key->cipher == WLAN_CIPHER_SUITE_WEP40 ||
+		key->cipher == WLAN_CIPHER_SUITE_WEP104) && !sta) {
+		/* send the faked unicast wep key */
+		mt7921_mcu_add_key(dev, vif, &msta_wep, key, cmd);
+	}
 
 	mt76_wcid_key_setup(&dev->mt76, wcid,
 			    cmd == SET_KEY ? key : NULL);
