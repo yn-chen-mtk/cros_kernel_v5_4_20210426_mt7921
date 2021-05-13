@@ -25,7 +25,7 @@
 #include "btbcm.h"
 #include "btrtl.h"
 
-#define VERSION "1.0.0.20210505"
+#define VERSION "1.0.0.20210513"
 
 static bool disable_scofix;
 static bool force_scofix;
@@ -375,6 +375,7 @@ static const struct usb_device_id blacklist_table[] = {
 	/* MediaTek Bluetooth devices */
 	{ USB_VENDOR_AND_INTERFACE_INFO(0x0e8d, 0xe0, 0x01, 0x01),
 	  .driver_info = BTUSB_MEDIATEK |
+			 BTUSB_WIDEBAND_SPEECH |
 			 BTUSB_VALID_LE_STATES },
 
 	/* Additional MediaTek MT7615E Bluetooth devices */
@@ -382,6 +383,7 @@ static const struct usb_device_id blacklist_table[] = {
 
 	/* Additional MediaTek MT7921 Bluetooth devices */
 	{ USB_DEVICE(0x04ca, 0x3802), .driver_info = BTUSB_MEDIATEK |
+						     BTUSB_WIDEBAND_SPEECH |
 						     BTUSB_VALID_LE_STATES },
 
 	/* Additional Realtek 8723AE Bluetooth devices */
@@ -1773,15 +1775,14 @@ static void btusb_work(struct work_struct *work)
 				if (test_bit(BTUSB_USE_ALT1_FOR_WBS,
 							&data->flags)) {
 					new_alts = 1;
-					bt_dev_info(hdev, "alt setting: new_alts = %d", new_alts);
 				} else if (btusb_find_altsetting(data, 6)) {
 					data->usb_alt6_packet_flow = true;
 					new_alts = 6;
-					bt_dev_info(hdev, "alt setting: new_alts = %d", new_alts);
 				} else {
 					bt_dev_err(hdev, "Device does not support ALT setting 6");
 				}
 			}
+			bt_dev_info(hdev, "alt setting: new_alts = %d", new_alts);
 
 			if (btusb_switch_alt_setting(hdev, new_alts) < 0)
 				bt_dev_err(hdev, "set USB alt:(%d) failed!", new_alts);
