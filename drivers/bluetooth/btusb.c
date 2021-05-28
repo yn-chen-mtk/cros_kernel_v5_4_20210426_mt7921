@@ -25,7 +25,7 @@
 #include "btbcm.h"
 #include "btrtl.h"
 
-#define VERSION "1.0.0.20210513"
+#define VERSION "1.0.0.20210528"
 
 static bool disable_scofix;
 static bool force_scofix;
@@ -3591,10 +3591,12 @@ done:
 static int btusb_mtk_shutdown(struct hci_dev *hdev)
 {
 	struct btmtk_hci_wmt_params wmt_params;
+	struct btusb_data *data = hci_get_drvdata(hdev);
 	u8 param = 0;
 	int err;
 
 	bt_dev_info(hdev, "btusb_mtk_shut_down");
+	usb_autopm_get_interface(data->intf);
 
 	/* Disable the device */
 	wmt_params.op = BTMTK_WMT_FUNC_CTRL;
