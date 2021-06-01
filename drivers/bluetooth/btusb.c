@@ -3620,8 +3620,6 @@ static void btusb_mtk_cmd_timeout(struct hci_dev *hdev)
 	u32 val;
 	int err;
 
-	bt_dev_err(hdev, "btusb_mtk_cmd_timeout");
-
 	/*
 	 * Toggle the hard reset line if the platform provides one. The reset
 	 * is going to yank the device off the USB and then replug. So doing
@@ -3634,16 +3632,17 @@ static void btusb_mtk_cmd_timeout(struct hci_dev *hdev)
 		return;
 	}
 
-	usb_disable_autosuspend(data->udev);
-	bt_dev_err(hdev, "Initiating HW reset via uhw");
+	if (enable_autosuspend)
+		usb_disable_autosuspend(data->udev);
+
 	data->sco_num = 0;
 
 	btusb_stop_traffic(data);
 	usb_kill_anchored_urbs(&data->tx_anchor);
-	/* For reset */
-	btusb_mtk_uhw_reg_write(data, EP_RST_OPT, EP_RST_IN_OUT_OPT);
 
-	/* read interrupt EP15 CR */
+	/* For reset */
+	bt_dev_info(hdev, "Initiating reset mechanism via uhw");
+	btusb_mtk_uhw_reg_write(data, EP_RST_OPT, EP_RST_IN_OUT_OPT);
 	btusb_mtk_uhw_reg_read(data, BT_WDT_STATUS, &val);
 
 	/* Write Reset CR to 1 */
@@ -3651,8 +3650,8 @@ static void btusb_mtk_cmd_timeout(struct hci_dev *hdev)
 
 	btusb_mtk_uhw_reg_write(data, UDMA_INT_STA_BT, 0x000000FF);
 	btusb_mtk_uhw_reg_read(data, UDMA_INT_STA_BT, &val);
-	btusb_mtk_uhw_reg_write(data, UDMA_INT_STA_BT1, 0x000000FF);
-	btusb_mtk_uhw_reg_read(data, UDMA_INT_STA_BT1, &val);
+	//btusb_mtk_uhw_reg_write(data, UDMA_INT_STA_BT1, 0x000000FF);
+	//btusb_mtk_uhw_reg_read(data, UDMA_INT_STA_BT1, &val);
 
 	/* Write Reset CR to 0 */
 	btusb_mtk_uhw_reg_write(data, BT_SUBSYS_RST, 0);
@@ -3663,16 +3662,21 @@ static void btusb_mtk_cmd_timeout(struct hci_dev *hdev)
 	msleep(900);
 	btusb_mtk_uhw_reg_read(data, BT_MISC, &val);
 	btusb_mtk_id_get(data, 0x70010200, &val);
+	bt_dev_info(hdev, "device id (%x)", val);
 
-	bt_dev_err(hdev, "device id (%x)", val);
 	btusb_mtk_uhw_reg_read(data, BT_MISC, &val);
-	btusb_mtk_setup(hdev);
-	bt_dev_err(hdev, "steup done");
+
+	err = btusb_mtk_setup(hdev);
+	if (err < 0) {
+		bt_dev_err(hdev, "mtk_setup failed, ett = %d", err);
+		goto failed;
+	}
 
 	if (test_bit(BTUSB_INTR_RUNNING, &data->flags)) {
 		err = btusb_submit_intr_urb(hdev, GFP_NOIO);
 		if (err < 0) {
 			clear_bit(BTUSB_INTR_RUNNING, &data->flags);
+			goto failed;
 		}
 	}
 
@@ -3680,9 +3684,8 @@ static void btusb_mtk_cmd_timeout(struct hci_dev *hdev)
 		err = btusb_submit_bulk_urb(hdev, GFP_NOIO);
 		if (err < 0) {
 			clear_bit(BTUSB_BULK_RUNNING, &data->flags);
+			goto failed;
 		}
-
-		btusb_submit_bulk_urb(hdev, GFP_NOIO);
 	}
 
 	if (test_bit(BTUSB_ISOC_RUNNING, &data->flags)) {
@@ -3691,7 +3694,11 @@ static void btusb_mtk_cmd_timeout(struct hci_dev *hdev)
 		else
 			btusb_submit_isoc_urb(hdev, GFP_NOIO);
 	}
-	usb_enable_autosuspend(data->udev);
+
+failed:
+	if (enable_autosuspend)
+		usb_enable_autosuspend(data->udev);
+
 	clear_bit(BTUSB_HW_RESET_ACTIVE, &data->flags);
 }
 
@@ -4729,7 +4736,7 @@ static int btusb_suspend(struct usb_interface *intf, pm_message_t message)
 {
 	struct btusb_data *data = usb_get_intfdata(intf);
 
-	BT_DBG("intf %p", intf);
+	BT_INFO("btusb_suspend intf %p", intf);
 
 	if (data->suspend_count++)
 		return 0;
@@ -4809,7 +4816,7 @@ static int btusb_resume(struct usb_interface *intf)
 	struct hci_dev *hdev = data->hdev;
 	int err = 0;
 
-	BT_DBG("intf %p", intf);
+	BT_INFO("btusb_resume intf %p", intf);
 
 	if (--data->suspend_count)
 		return 0;
