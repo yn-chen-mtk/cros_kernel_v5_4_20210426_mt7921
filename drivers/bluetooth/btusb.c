@@ -25,7 +25,7 @@
 #include "btbcm.h"
 #include "btrtl.h"
 
-#define VERSION "1.0.0.20210528"
+#define VERSION "1.0.0.20210602"
 
 static bool disable_scofix;
 static bool force_scofix;
@@ -2766,13 +2766,13 @@ static int btusb_shutdown_intel_new(struct hci_dev *hdev)
 #ifdef CONFIG_BT_HCIBTUSB_MTK
 
 /* UHW CR mapping */
-#define BT_MISC 0x70002510
-#define BT_SUBSYS_RST 0x70002610
-#define UDMA_INT_STA_BT 0x74000024
-#define UDMA_INT_STA_BT1 0x74000308
-#define BT_WDT_STATUS 0x740003A0
-#define EP_RST_OPT 0x74011890
-#define EP_RST_IN_OUT_OPT 0x00010001
+#define BT_MISC			0x70002510
+#define BT_SUBSYS_RST		0x70002610
+#define UDMA_INT_STA_BT		0x74000024
+#define UDMA_INT_STA_BT1	0x74000308
+#define BT_WDT_STATUS		0x740003A0
+#define EP_RST_OPT		0x74011890
+#define EP_RST_IN_OUT_OPT	0x00010001
 
 #define FIRMWARE_MT7663		"mediatek/mt7663pr2h.bin"
 #define FIRMWARE_MT7668		"mediatek/mt7668pr2h.bin"
@@ -3393,7 +3393,7 @@ static int btusb_mtk_uhw_reg_read(struct btusb_data *data, u32 reg, u32 *val)
 			      reg >> 16, reg & 0xffff,
 			      buf, size, USB_CTRL_SET_TIMEOUT);
 	if (err < 0) {
-		BT_ERR("Failed to write uhw reg(%d)", err);
+		BT_ERR("Failed to read uhw reg(%d)", err);
 		goto err_free_buf;
 	}
 
